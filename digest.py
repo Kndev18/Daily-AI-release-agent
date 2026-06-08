@@ -14,7 +14,7 @@ from google import genai
 from google.genai import types
 from google.genai.errors import ClientError
 
-# ── Config ───────────────────────────────────────────────────────────[...]
+# ── Config ───────────────────────────────────────────────────────────[..[...]
 
 CATEGORIES = {
     "frontier":  "🧠 Frontier models",
@@ -83,7 +83,7 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
             return items
             
         except ClientError as e:
-            if e.status_code == 429:
+            if e.code == 429:
                 if attempt < max_retries - 1:
                     wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
                     print(f"⚠️  Rate limited (429). Retrying in {wait_time}s...")
@@ -98,7 +98,7 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
                 raise
 
 
-# ── Slack formatter ─────────────────────────────────────────────────────────[...]
+# ── Slack formatter ──────────────────────────────────────────────────────────[...]
 
 def signal_dots(n: int) -> str:
     return "●" * n + "○" * (3 - n)
@@ -196,7 +196,7 @@ def send_to_slack(payload: dict) -> None:
         sys.exit(1)
 
 
-# ── Main ────────────────────────────────────────────────────────────[...]
+# ── Main ────────────────────────────────────────────────────────────[[...]
 
 if __name__ == "__main__":
     print("🚀  Starting AI Releases Digest Agent")
