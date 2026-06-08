@@ -22,11 +22,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install google-genai requests
+        run: pip install groq requests
 
       - name: Run digest agent
         env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python digest.py
 
