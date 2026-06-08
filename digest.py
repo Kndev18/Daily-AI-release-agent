@@ -45,7 +45,7 @@ Each item must match this exact schema:
   "source":   "<e.g. arxiv | huggingface | openai blog | hacker news | github | x.com | techcrunch>",
   "summary":  "<2 sentences: what it is + why it matters>",
   "url":      "<direct link to announcement or paper>",
-  "signal":   1
+  "signal":   <1 | 2 | 3>
 }}
 signal = 1, 2, or 3. 3 means must-read / highly significant.
 """
@@ -57,10 +57,54 @@ signal = 1, 2, or 3. 3 means must-read / highly significant.
 MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b")
 
 
+def validate_item(item: any) -> dict | None:
+    """
+    Validate and sanitize a single digest item.
+    Returns the item if valid, None if invalid.
+    """
+    # Must be a dictionary
+    if not isinstance(item, dict):
+        print(f"⚠️  Skipping invalid item (not a dict): {repr(item)[:100]}", file=sys.stderr)
+        return None
+    
+    # Validate required fields
+    required_fields = ["title", "cat", "source", "summary", "url", "signal"]
+    for field in required_fields:
+        if field not in item:
+            print(f"⚠️  Skipping item missing field '{field}': {item.get('title', 'unknown')}", file=sys.stderr)
+            return None
+    
+    # Ensure all fields are strings except signal
+    for field in ["title", "cat", "source", "summary", "url"]:
+        if not isinstance(item.get(field), str):
+            print(f"⚠️  Skipping item with non-string '{field}': {item.get('title', 'unknown')}", file=sys.stderr)
+            return None
+    
+    # Validate and sanitize signal (must be int 1-3)
+    signal = item.get("signal")
+    if not isinstance(signal, int):
+        try:
+            signal = int(signal)
+        except (ValueError, TypeError):
+            print(f"⚠️  Invalid signal for '{item.get('title', 'unknown')}': {signal}. Using default 1.", file=sys.stderr)
+            signal = 1
+    
+    signal = max(1, min(3, signal))  # Clamp to 1-3
+    item["signal"] = signal
+    
+    # Validate category
+    if item["cat"] not in CATEGORIES:
+        print(f"⚠️  Invalid category '{item['cat']}' for '{item.get('title', 'unknown')}'. Using 'applied'.", file=sys.stderr)
+        item["cat"] = "applied"
+    
+    return item
+
+
 def fetch_digest(max_retries: int = 3) -> list[dict]:
     """
     Fetch AI digest from Groq API (free, unlimited tier).
     Model is configurable via the GROQ_MODEL environment variable.
+    Returns validated list of items.
     """
     client = groq.Groq(api_key=os.environ["GROQ_API_KEY"])
 
@@ -72,7 +116,7 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
                 messages=[
                     {
                         "role": "system",
-                        "content": "You are an AI digest agent. Return ONLY valid JSON array, nothing else."
+                        "content": "You are an AI digest agent. Return ONLY valid JSON array, nothing else. No markdown, no code fences."
                     },
                     {
                         "role": "user",
@@ -85,13 +129,30 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
 
             raw = response.choices[0].message.content
 
+            # Extract JSON array from response
             match = re.search(r"\[.*\]", raw, re.DOTALL)
             if not match:
                 raise ValueError(f"No JSON array found in response:\n{raw[:500]}")
 
-            items = json.loads(match.group())
-            print(f"✅  Fetched {len(items)} items from Groq")
-            return items
+            # Parse JSON
+            parsed = json.loads(match.group())
+            
+            # Ensure it's a list
+            if not isinstance(parsed, list):
+                raise ValueError(f"Expected JSON array, got {type(parsed).__name__}")
+            
+            # Validate and filter items
+            validated_items = []
+            for item in parsed:
+                validated = validate_item(item)
+                if validated:
+                    validated_items.append(validated)
+            
+            if not validated_items:
+                raise ValueError("No valid items found after validation")
+            
+            print(f"✅  Fetched {len(validated_items)} valid items from Groq")
+            return validated_items
 
         except groq.BadRequestError as e:
             # Specific handling for decommissioned / invalid model errors to give an actionable message.
@@ -126,10 +187,13 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
 # ── Slack formatter ────────────────────────────────────────────────────────
 
 def signal_dots(n: int) -> str:
+    """Convert signal level (1-3) to visual dots."""
+    n = max(1, min(3, int(n)))  # Clamp to 1-3
     return "●" * n + "○" * (3 - n)
 
 
 def build_slack_payload(items: list[dict]) -> dict:
+    """Build Slack message payload from digest items."""
     today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
     top   = [i for i in items if i.get("signal") == 3]
 
@@ -154,12 +218,14 @@ def build_slack_payload(items: list[dict]) -> dict:
         {"type": "divider"},
     ]
 
+    # Group items by category
     by_cat: dict[str, list] = {k: [] for k in CATEGORIES}
     for item in items:
         cat = item.get("cat", "applied")
         if cat in by_cat:
             by_cat[cat].append(item)
 
+    # Render each category
     for cat_key, cat_label in CATEGORIES.items():
         cat_items = by_cat.get(cat_key, [])
         if not cat_items:
@@ -171,14 +237,26 @@ def build_slack_payload(items: list[dict]) -> dict:
         })
 
         for item in cat_items:
-            title   = item.get("title", "Untitled")
-            summary = item.get("summary", "")
-            url     = item.get("url", "")
-            source  = item.get("source", "")
+            # Extract and sanitize fields
+            title   = str(item.get("title", "Untitled"))
+            summary = str(item.get("summary", ""))
+            url     = str(item.get("url", ""))
+            source  = str(item.get("source", ""))
             signal  = item.get("signal", 1)
-            dots    = signal_dots(signal)
+            
+            # Ensure signal is valid
+            if not isinstance(signal, int):
+                try:
+                    signal = int(signal)
+                except (ValueError, TypeError):
+                    signal = 1
+            signal = max(1, min(3, signal))
+            
+            dots = signal_dots(signal)
 
+            # Build link text
             link_text = f"<{url}|{title}>" if url else title
+            
             blocks.append({
                 "type": "section",
                 "text": {
@@ -209,6 +287,7 @@ def build_slack_payload(items: list[dict]) -> dict:
 # ── Slack delivery ─────────────────────────────────────────────────────────
 
 def send_to_slack(payload: dict) -> None:
+    """Send formatted digest to Slack via webhook."""
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
     if not webhook:
         print("⚠️  SLACK_WEBHOOK_URL not set — skipping Slack delivery")
@@ -226,7 +305,11 @@ def send_to_slack(payload: dict) -> None:
 
 if __name__ == "__main__":
     print("🚀  Starting AI Releases Digest Agent")
-    items   = fetch_digest()
-    payload = build_slack_payload(items)
-    send_to_slack(payload)
-    print("🎉  Done")
+    try:
+        items   = fetch_digest()
+        payload = build_slack_payload(items)
+        send_to_slack(payload)
+        print("🎉  Done")
+    except Exception as e:
+        print(f"❌  Fatal error: {e}", file=sys.stderr)
+        sys.exit(1)
