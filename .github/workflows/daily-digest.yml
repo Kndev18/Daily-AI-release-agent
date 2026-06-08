@@ -4,7 +4,7 @@ on:
   schedule:
     # 16:00 UTC = 18:00 Budapest (CET+2 / CEST)
     # Using :02 to avoid GitHub's top-of-hour congestion
-    - cron: '2 16 * * 1-5'
+    - cron: '2 16 * * *'
   workflow_dispatch:   # lets you trigger manually from the Actions tab
 
 jobs:
@@ -22,11 +22,11 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install anthropic requests
+        run: pip install google-generativeai requests
 
       - name: Run digest agent
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python digest.py
 
@@ -35,6 +35,11 @@ jobs:
       - name: Keepalive commit
         run: |
           git config user.name  "digest-bot"
+          git config user.email "digest-bot@users.noreply.github.com"
+          date -u > .last_run
+          git add .last_run
+          git diff --cached --quiet || git commit -m "chore: digest keepalive $(date -u +%Y-%m-%d)"
+          git push          git config user.name  "digest-bot"
           git config user.email "digest-bot@users.noreply.github.com"
           date -u > .last_run
           git add .last_run
