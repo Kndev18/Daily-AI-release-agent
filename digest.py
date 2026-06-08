@@ -8,9 +8,9 @@ Requires two GitHub secrets:
 """
 
 import os, json, re, sys, time
-import requests
 from datetime import datetime, timezone
-from groq import Groq
+import requests
+import groq
 
 # ── Config ───────────────────────────────────────────────────────────
 
@@ -39,31 +39,36 @@ Categories:
 
 Return ONLY a valid JSON array — no markdown, no backticks, no explanation before or after.
 Each item must match this exact schema:
-{{
+{
   "title":    "<concise headline, max 12 words>",
   "cat":      "<one of: frontier | agents | infra | applied | oss | research>",
   "source":   "<e.g. arxiv | huggingface | openai blog | hacker news | github | x.com | techcrunch>",
   "summary":  "<2 sentences: what it is + why it matters>",
   "url":      "<direct link to announcement or paper>",
   "signal":   <1 | 2 | 3>
-}}
+}
 signal = 3 means must-read / highly significant.
 """
 
 # ── Groq call (free, unlimited, no quota) ────────────────────────────────
 
+# Make the model configurable so deprecations don't break the workflow.
+# Default to a safe Mixtral name; override with the GROQ_MODEL env var or a repo secret.
+MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b")
+
+
 def fetch_digest(max_retries: int = 3) -> list[dict]:
     """
     Fetch AI digest from Groq API (free, unlimited tier).
-    Uses Mixtral 8x7b for fast, accurate responses.
+    Model is configurable via the GROQ_MODEL environment variable.
     """
-    client = Groq(api_key=os.environ["GROQ_API_KEY"])
-    
+    client = groq.Groq(api_key=os.environ["GROQ_API_KEY"])
+
     for attempt in range(max_retries):
         try:
-            print(f"📡 Calling Groq Mixtral 8x7b (attempt {attempt + 1}/{max_retries})...")
+            print(f"📡 Calling Groq model {MODEL} (attempt {attempt + 1}/{max_retries})...")
             response = client.chat.completions.create(
-                model="mixtral-8x7b-32768",
+                model=MODEL,
                 messages=[
                     {
                         "role": "system",
@@ -87,7 +92,22 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
             items = json.loads(match.group())
             print(f"✅  Fetched {len(items)} items from Groq")
             return items
-            
+
+        except groq.BadRequestError as e:
+            # Specific handling for decommissioned / invalid model errors to give an actionable message.
+            msg = str(e).lower()
+            if "decommission" in msg or "no longer supported" in msg:
+                err_text = (
+                    f"Groq model '{MODEL}' appears to be decommissioned or unsupported.\n"
+                    "Set the GROQ_MODEL environment variable (or add a repository secret named GROQ_MODEL) to a supported model.\n"
+                    "See: https://console.groq.com/docs/deprecations for recommended replacements."
+                )
+                print(f"❌  {err_text}", file=sys.stderr)
+                raise RuntimeError(err_text) from e
+            # Re-raise for other BadRequest situations
+            print(f"❌  BadRequestError from Groq: {e}", file=sys.stderr)
+            raise
+
         except Exception as e:
             if "rate_limit" in str(e).lower() or "429" in str(e):
                 if attempt < max_retries - 1:
@@ -107,6 +127,7 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
 
 def signal_dots(n: int) -> str:
     return "●" * n + "○" * (3 - n)
+
 
 def build_slack_payload(items: list[dict]) -> dict:
     today = datetime.now(timezone.utc).strftime("%A, %d %B %Y")
@@ -177,7 +198,7 @@ def build_slack_payload(items: list[dict]) -> dict:
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": "Powered by Groq Mixtral 8x7b (free tier) · runs daily at 18:00 Budapest time",
+                "text": f"Powered by Groq {MODEL} (free tier) · runs daily at 18:00 Budapest time",
             }
         ],
     })
