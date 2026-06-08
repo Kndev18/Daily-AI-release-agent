@@ -39,14 +39,14 @@ Categories:
 
 Return ONLY a valid JSON array — no markdown, no backticks, no explanation before or after.
 Each item must match this exact schema:
-{
+{{
   "title":    "<concise headline, max 12 words>",
   "cat":      "<one of: frontier | agents | infra | applied | oss | research>",
   "source":   "<e.g. arxiv | huggingface | openai blog | hacker news | github | x.com | techcrunch>",
   "summary":  "<2 sentences: what it is + why it matters>",
   "url":      "<direct link to announcement or paper>",
   "signal":   <1 | 2 | 3>
-}
+}}
 signal = 3 means must-read / highly significant.
 """
 
@@ -84,12 +84,22 @@ def fetch_digest(max_retries: int = 3) -> list[dict]:
             )
 
             raw = response.choices[0].message.content
+            print(f"📝 Raw response (first 200 chars): {raw[:200]}")
 
             match = re.search(r"\[.*\]", raw, re.DOTALL)
             if not match:
                 raise ValueError(f"No JSON array found in response:\n{raw[:500]}")
 
             items = json.loads(match.group())
+            
+            # Validate that items is a list of dictionaries
+            if not isinstance(items, list):
+                raise ValueError(f"Expected JSON array, got {type(items).__name__}: {items}")
+            
+            for i, item in enumerate(items):
+                if not isinstance(item, dict):
+                    raise ValueError(f"Item {i} is not a dict, got {type(item).__name__}: {item}")
+            
             print(f"✅  Fetched {len(items)} items from Groq")
             return items
 
