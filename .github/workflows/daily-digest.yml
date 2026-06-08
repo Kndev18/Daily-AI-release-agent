@@ -2,15 +2,16 @@ name: AI Releases Daily Digest
 
 on:
   schedule:
+    # 16:00 UTC = 18:00 Budapest (CET+2 / CEST)
+    # Using :02 to avoid GitHub's top-of-hour congestion
     - cron: '2 16 * * 1-5'
-  workflow_dispatch:
-
-permissions:
-  contents: write
+  workflow_dispatch:   # lets you trigger manually from the Actions tab
 
 jobs:
   digest:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,17 +24,19 @@ jobs:
       - name: Install dependencies
         run: pip install anthropic requests
 
-      - name: Run digest
+      - name: Run digest agent
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
         run: python digest.py
 
-      - name: Keep workflow alive
+      # Keepalive: touches a file every run so the repo never goes 60 days
+      # without activity (which would cause GitHub to disable scheduled runs)
+      - name: Keepalive commit
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          echo "$(date -u)" > .last_run
+          git config user.name  "digest-bot"
+          git config user.email "digest-bot@users.noreply.github.com"
+          date -u > .last_run
           git add .last_run
-          git commit -m "chore: keep alive [skip ci]"
+          git diff --cached --quiet || git commit -m "chore: digest keepalive $(date -u +%Y-%m-%d)"
           git push
