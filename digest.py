@@ -7,13 +7,14 @@ Requires two GitHub secrets:
   SLACK_WEBHOOK_URL   — incoming webhook URL from your Slack app
 """
 
-import os, json, re, sys
+import os, json, re, sys, time
 import requests
 from datetime import datetime, timezone
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ───────────────────────────────────────────────────────────[...]
 
 CATEGORIES = {
     "frontier":  "🧠 Frontier models",
@@ -51,31 +52,53 @@ Each item must match this exact schema:
 signal = 3 means must-read / highly significant.
 """
 
-# ── Gemini call (with Google Search grounding) ────────────────────────────────
+# ── Gemini call (with Google Search grounding + retry logic) ────────────────────────────────
 
-def fetch_digest() -> list[dict]:
+def fetch_digest(max_retries: int = 3) -> list[dict]:
+    """
+    Fetch AI digest from Gemini 2.5 Pro with exponential backoff retry logic.
+    Handles rate limiting (429) gracefully.
+    """
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"📡 Calling Gemini 2.5 Pro (attempt {attempt + 1}/{max_retries})...")
+            response = client.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=DIGEST_PROMPT,
+                config=types.GenerateContentConfig(
+                    tools=[types.Tool(google_search=types.GoogleSearch())],
+                ),
+            )
 
-    response = client.models.generate_content(
-        model="gemini-2.5-pro",
-        contents=DIGEST_PROMPT,
-        config=types.GenerateContentConfig(
-            tools=[types.Tool(google_search=types.GoogleSearch())],
-        ),
-    )
+            raw = response.text
 
-    raw = response.text
+            match = re.search(r"\[.*\]", raw, re.DOTALL)
+            if not match:
+                raise ValueError(f"No JSON array found in response:\n{raw[:500]}")
 
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
-    if not match:
-        raise ValueError(f"No JSON array found in response:\n{raw[:500]}")
+            items = json.loads(match.group())
+            print(f"✅  Fetched {len(items)} items from Gemini 2.5 Pro")
+            return items
+            
+        except ClientError as e:
+            if e.status_code == 429:
+                if attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s, 4s
+                    print(f"⚠️  Rate limited (429). Retrying in {wait_time}s...")
+                    time.sleep(wait_time)
+                else:
+                    print(f"❌  Rate limited after {max_retries} attempts. Check your Gemini API quota:", file=sys.stderr)
+                    print(f"    Visit: https://ai.google.dev/gemini-api/docs/rate-limits", file=sys.stderr)
+                    print(f"    Or upgrade at: https://aistudio.google.com/app/apikey", file=sys.stderr)
+                    raise
+            else:
+                # Non-rate-limit errors should fail immediately
+                raise
 
-    items = json.loads(match.group())
-    print(f"✅  Fetched {len(items)} items from Gemini 2.5 Pro")
-    return items
 
-
-# ── Slack formatter ───────────────────────────────────────────────────────────
+# ── Slack formatter ─────────────────────────────────────────────────────────[...]
 
 def signal_dots(n: int) -> str:
     return "●" * n + "○" * (3 - n)
@@ -157,7 +180,7 @@ def build_slack_payload(items: list[dict]) -> dict:
     return {"blocks": blocks}
 
 
-# ── Slack delivery ────────────────────────────────────────────────────────────
+# ── Slack delivery ─────────────────────────────────────────────────────────[...]
 
 def send_to_slack(payload: dict) -> None:
     webhook = os.environ.get("SLACK_WEBHOOK_URL")
@@ -173,7 +196,7 @@ def send_to_slack(payload: dict) -> None:
         sys.exit(1)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Main ────────────────────────────────────────────────────────────[...]
 
 if __name__ == "__main__":
     print("🚀  Starting AI Releases Digest Agent")
