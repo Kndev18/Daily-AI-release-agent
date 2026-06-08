@@ -54,7 +54,7 @@ signal = 1, 2, or 3. 3 means must-read / highly significant.
 
 # Make the model configurable so deprecations don't break the workflow.
 # Default to a safe Mixtral name; override with the GROQ_MODEL env var or a repo secret.
-MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b")
+MODEL = os.getenv("GROQ_MODEL", "mixtral-8x7b-32768")
 
 
 def validate_item(item: any) -> dict | None:
